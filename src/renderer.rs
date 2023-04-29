@@ -4,6 +4,8 @@ use wgpu::util::DeviceExt;
 pub struct Renderer{
     render_pipeline: wgpu::RenderPipeline,
     vertex_buffer: wgpu::Buffer,
+    index_buffer: wgpu::Buffer,
+    num_of_indices: u32,
 }
 
 #[repr(C)]
@@ -35,18 +37,15 @@ impl Vertex{
 }
 
 const VERTICES: &[Vertex] = &[
-    Vertex{
-        position: [-0.5, -0.5],
-        color: [1.0, 0.0, 0.0],
-    },
-    Vertex{
-        position: [0.5, -0.5],
-        color: [0.0, 1.0, 0.0],
-    },
-    Vertex{
-        position: [0.0, 0.5],
-        color: [0.0, 0.0, 1.0],
-    },
+        Vertex { position: [-0.5, -0.5], color: [0.5, 0.0, 0.5] }, // A
+        Vertex { position: [0.5, -0.5], color: [0.5, 0.0, 0.5] }, // B
+        Vertex { position: [-0.5, 0.5], color: [0.5, 0.0, 0.5] }, // C
+        Vertex { position: [0.5, 0.5], color: [0.5, 0.0, 0.5] }, // D
+    ];
+
+const INDICES: &[u16] = &[
+        0, 1, 2,
+        2, 1, 3,
 ];
 
 impl Renderer{
@@ -104,9 +103,21 @@ impl Renderer{
             usage: wgpu::BufferUsages::VERTEX,
         });
         
+        let index_buffer = device.create_buffer_init(
+            &wgpu::util::BufferInitDescriptor{
+                label: Some("index buffer"),
+                contents: bytemuck::cast_slice(INDICES),
+                usage: wgpu::BufferUsages::INDEX,
+            }
+        );
+        
+        let num_of_indices = INDICES.len() as u32;
+        
         Self{
             render_pipeline,
-            vertex_buffer
+            vertex_buffer,
+            index_buffer,
+            num_of_indices,
         }
     }
     
@@ -139,7 +150,8 @@ impl Renderer{
             
             render_pass.set_pipeline(&self.render_pipeline);
             render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
-            render_pass.draw(0..3, 0..1);
+            render_pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
+            render_pass.draw_indexed(0..self.num_of_indices, 0, 0..1);            
         }
         queue.submit(iter::once(encoder.finish()));
         output.present(); //draws the stuff to the surface texture
