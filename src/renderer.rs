@@ -42,12 +42,12 @@ impl Vertex{
 
 
 impl Renderer{
-    pub fn new(device: &wgpu::Device, config: &wgpu::SurfaceConfiguration, shader: &wgpu::ShaderModule, camera_bind_group: wgpu::BindGroupLayout) -> Self{
+    pub fn new(device: &wgpu::Device, config: &wgpu::SurfaceConfiguration, shader: &wgpu::ShaderModule, camera_bind_group: &wgpu::BindGroupLayout) -> Self{
         //describes available binding group of the pipeline 
         let render_pipeline_layout = 
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor{
                 label: Some("Render pipeline layout"),
-                bind_group_layouts: &[&camera_bind_group],
+                bind_group_layouts: &[camera_bind_group],
                 push_constant_ranges: &[],
             });
         //describes shaders, buffers and stuff
