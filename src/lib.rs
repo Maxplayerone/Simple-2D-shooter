@@ -1,14 +1,76 @@
+use std::iter;
 use winit::{
     event::*,
     event_loop::{ControlFlow, EventLoop},
     window::{Window, WindowBuilder},
 };
+use wgpu::util::DeviceExt;
+
+use cgmath::{ortho, Matrix4, Point3, Vector3};
 
 #[cfg(target_arch="wasm32")]
 use wasm_bindgen::prelude::*;
 
 mod renderer;
 use renderer::Renderer;
+use renderer::Buffers;
+
+struct Camera{
+    pub view_matrix: Matrix4<f32>,
+    pub projection_matrix: Matrix4<f32>,
+}
+
+#[rustfmt::skip]
+pub const OPENGL_TO_WGPU_MATRIX: cgmath::Matrix4<f32> = cgmath::Matrix4::new(
+    1.0, 0.0, 0.0, 0.0,
+    0.0, 1.0, 0.0, 0.0,
+    0.0, 0.0, 0.5, 0.0,
+    0.0, 0.0, 0.5, 1.0,
+);
+
+impl Camera{
+    fn new(config: &wgpu::SurfaceConfiguration) -> Self{
+        let left = 0.0;
+        let right = config.width as f32;
+        let bottom = 0.0;
+        let top = config.height as f32;
+        let near = 0.1;
+        let far = 100.0;
+
+        let projection_matrix = ortho(left, right, bottom, top, near, far);
+        let eye = Point3::new(0.0, 0.0, 1.0);
+        let target = Point3::new(0.0, 0.0, 0.0);
+        let up = Vector3::new(0.0, 1.0, 0.0);
+
+        let view_matrix = Matrix4::look_at_rh(eye, target, up);
+
+        Self{
+            view_matrix,
+            projection_matrix,
+        }
+    }
+}
+
+#[repr(C)]
+#[derive(Debug, Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
+struct CameraUniform{
+    view_proj: [[f32; 4]; 4],
+}
+
+impl CameraUniform{
+    fn new() -> Self{
+        use cgmath::SquareMatrix;
+        Self{
+            view_proj: cgmath::Matrix4::identity().into(),
+        }
+    }
+    
+    fn update_view_proj(&mut self, config: &wgpu::SurfaceConfiguration){
+        let matrices = Camera::new(&config);
+        let view_proj_mat = OPENGL_TO_WGPU_MATRIX * matrices.projection_matrix * matrices.view_matrix;
+        self.view_proj = view_proj_mat.into();
+    }
+}
 
 struct State {
     surface: wgpu::Surface,
@@ -18,6 +80,11 @@ struct State {
     size: winit::dpi::PhysicalSize<u32>,
     window: Window,
     renderer: Renderer,
+    buffers: Buffers,
+    
+    camera_uniform: CameraUniform,
+    camera_buffer: wgpu::Buffer,
+    camera_bind_group: wgpu::BindGroup,
 }
 
 impl State {
@@ -88,10 +155,48 @@ impl State {
             label: Some("Shader"),
             source: wgpu::ShaderSource::Wgsl(include_str!("shader.wgsl").into()),
         });
+        let mut camera_uniform = CameraUniform::new();
+        camera_uniform.update_view_proj(&config);
         
-        let renderer = Renderer::new(&device, &config, &shader);
+        let camera_buffer = device.create_buffer_init(
+            &wgpu::util::BufferInitDescriptor{
+                label: Some("Camera Buffer"),
+                contents: bytemuck::cast_slice(&[camera_uniform]),
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            }
+        );
+        
+        let camera_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor{
+            entries: &[
+                wgpu::BindGroupLayoutEntry{
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::VERTEX,
+                    ty: wgpu::BindingType::Buffer{
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                }
+            ],
+            label: Some("camera bind group layout"),
+        });
+        
+        let camera_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor{
+            layout: &camera_bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry{
+                    binding: 0,
+                    resource: camera_buffer.as_entire_binding(),
+                }
+            ],
+            label: Some("camera bind group"),
+        });
 
-
+        
+        let renderer = Renderer::new(&device, &config, &shader, camera_bind_group_layout);
+        let buffers = Renderer::push_quad(&device, 0.0, 0.0);
+        
         Self {
             surface,
             device,
@@ -100,6 +205,10 @@ impl State {
             size,
             window,
             renderer,
+            buffers,
+            camera_uniform,
+            camera_buffer,
+            camera_bind_group,
         }
     }
 
@@ -124,7 +233,41 @@ impl State {
     fn update(&mut self) {}
 
     fn render(&mut self) -> Result<(), wgpu::SurfaceError> {
-        self.renderer.render(&self.surface, &self.device, &self.queue);
+        let output = self.surface.get_current_texture()?;    
+        let view = output.texture.create_view(&wgpu::TextureViewDescriptor::default());
+        //saves a series of gpu instructions (for example render_pass)
+        let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor{
+            label: Some("Render Encoder"),
+        });
+        
+        {
+            let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor{
+                label: Some("Render Pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment{
+                    view: &view,
+                    resolve_target: None,
+                    ops: wgpu::Operations{
+                        load: wgpu::LoadOp::Clear(wgpu::Color{
+                            r: 0.1,
+                            b: 0.2,
+                            g: 0.3,
+                            a: 1.0
+                        }),
+                        store: true,
+                    },
+                })],
+                depth_stencil_attachment: None,
+            });
+            
+            
+            render_pass.set_pipeline(&self.renderer.render_pipeline); 
+            render_pass.set_bind_group(0, &self.camera_bind_group, &[]);
+            render_pass.set_vertex_buffer(0, self.buffers.vertex_buffer.slice(..));
+            render_pass.set_index_buffer(self.buffers.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
+            render_pass.draw_indexed(0..self.buffers.num_of_indices, 0, 0..1);            
+        }
+        self.queue.submit(iter::once(encoder.finish()));
+        output.present(); //draws the stuff to the surface texture
         Ok(())
     }
 }

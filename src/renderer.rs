@@ -1,11 +1,15 @@
-use std::iter;
 use wgpu::util::DeviceExt;
 
 pub struct Renderer{
-    render_pipeline: wgpu::RenderPipeline,
-    vertex_buffer: wgpu::Buffer,
-    index_buffer: wgpu::Buffer,
-    num_of_indices: u32,
+    pub render_pipeline: wgpu::RenderPipeline,
+}
+
+pub struct Buffers{
+    pub vertex_buffer: wgpu::Buffer,
+    pub index_buffer: wgpu::Buffer,
+    pub num_of_indices: u32,
+    vertices: [Vertex; 4],
+    indices: [u16; 6],
 }
 
 #[repr(C)]
@@ -36,25 +40,14 @@ impl Vertex{
     }
 }
 
-const VERTICES: &[Vertex] = &[
-        Vertex { position: [-0.5, -0.5], color: [0.5, 0.0, 0.5] }, // A
-        Vertex { position: [0.5, -0.5], color: [0.5, 0.0, 0.5] }, // B
-        Vertex { position: [-0.5, 0.5], color: [0.5, 0.0, 0.5] }, // C
-        Vertex { position: [0.5, 0.5], color: [0.5, 0.0, 0.5] }, // D
-    ];
-
-const INDICES: &[u16] = &[
-        0, 1, 2,
-        2, 1, 3,
-];
 
 impl Renderer{
-    pub fn new(device: &wgpu::Device, config: &wgpu::SurfaceConfiguration, shader: &wgpu::ShaderModule) -> Self{
+    pub fn new(device: &wgpu::Device, config: &wgpu::SurfaceConfiguration, shader: &wgpu::ShaderModule, camera_bind_group: wgpu::BindGroupLayout) -> Self{
         //describes available binding group of the pipeline 
         let render_pipeline_layout = 
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor{
                 label: Some("Render pipeline layout"),
-                bind_group_layouts: &[],
+                bind_group_layouts: &[&camera_bind_group],
                 push_constant_ranges: &[],
             });
         //describes shaders, buffers and stuff
@@ -97,64 +90,45 @@ impl Renderer{
                 multiview: None,
             });
         
+        Self{
+            render_pipeline,
+        }
+    }
+    
+    pub fn push_quad(device: &wgpu::Device, x: f32, y: f32) -> Buffers{
+       
+        let vertices = [
+            Vertex{position: [x, y], color: [0.0, 1.0, 0.0]},
+            Vertex{position: [x + 100.0, y], color: [0.0, 1.0, 0.0]},
+            Vertex{position: [x, y + 100.0], color: [0.0, 1.0, 0.0]},
+            Vertex{position: [x + 100.0, y + 100.0], color: [0.0, 1.0, 0.0]},
+        ];
+        
+        let indices = [0, 1, 2, 2, 1, 3];
+               
         let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor{
             label: Some("Vertex Buffer"),
-            contents: bytemuck::cast_slice(VERTICES),
+            contents: bytemuck::cast_slice(&vertices),
             usage: wgpu::BufferUsages::VERTEX,
         });
         
         let index_buffer = device.create_buffer_init(
             &wgpu::util::BufferInitDescriptor{
                 label: Some("index buffer"),
-                contents: bytemuck::cast_slice(INDICES),
+                contents: bytemuck::cast_slice(&indices),
                 usage: wgpu::BufferUsages::INDEX,
             }
         );
         
-        let num_of_indices = INDICES.len() as u32;
+        let num_of_indices = 6;
         
-        Self{
-            render_pipeline,
+        Buffers{
             vertex_buffer,
             index_buffer,
             num_of_indices,
+            vertices,
+            indices,
         }
     }
     
-    pub fn render(&mut self, surface: &wgpu::Surface, device: &wgpu::Device, queue: &wgpu::Queue) -> Result<(), wgpu::SurfaceError> {
-         let output = surface.get_current_texture()?;    
-        let view = output.texture.create_view(&wgpu::TextureViewDescriptor::default());
-        //saves a series of gpu instructions (for example render_pass)
-        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor{
-            label: Some("Render Encoder"),
-        });
-        
-        {
-            let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor{
-                label: Some("Render Pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment{
-                    view: &view,
-                    resolve_target: None,
-                    ops: wgpu::Operations{
-                        load: wgpu::LoadOp::Clear(wgpu::Color{
-                            r: 0.1,
-                            b: 0.2,
-                            g: 0.3,
-                            a: 1.0
-                        }),
-                        store: true,
-                    },
-                })],
-                depth_stencil_attachment: None,
-            });
-            
-            render_pass.set_pipeline(&self.render_pipeline);
-            render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
-            render_pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
-            render_pass.draw_indexed(0..self.num_of_indices, 0, 0..1);            
-        }
-        queue.submit(iter::once(encoder.finish()));
-        output.present(); //draws the stuff to the surface texture
-        Ok(())
-    }    
 }
