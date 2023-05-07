@@ -5,16 +5,17 @@ use winit::{
     window::{Window, WindowBuilder},
 };
 
-#[cfg(target_arch="wasm32")]
+#[cfg(target_arch = "wasm32")]
 use wasm_bindgen::prelude::*;
 
 mod renderer;
-use renderer::Renderer;
 use renderer::Buffers;
+use renderer::Renderer;
 
 mod camera;
 use camera::Camera;
 
+use cgmath::point2;
 
 struct State {
     surface: wgpu::Surface,
@@ -24,8 +25,13 @@ struct State {
     size: winit::dpi::PhysicalSize<u32>,
     window: Window,
     renderer: Renderer,
-    buffers: Buffers,
     camera: Camera,
+
+    quad_size: f32,
+    player_speed: f32,
+    is_left_pressed: bool,
+    is_right_pressed: bool,
+    gravity: f32,
 }
 
 impl State {
@@ -38,7 +44,7 @@ impl State {
             backends: wgpu::Backends::all(),
             dx12_shader_compiler: Default::default(),
         });
-        
+
         // # Safety
         //
         // The surface needs to live as long as the window that created it.
@@ -76,7 +82,9 @@ impl State {
         // Shader code in this tutorial assumes an Srgb surface texture. Using a different
         // one will result all the colors comming out darker. If you want to support non
         // Srgb surfaces, you'll need to account for that when drawing to the frame.
-        let surface_format = surface_caps.formats.iter()
+        let surface_format = surface_caps
+            .formats
+            .iter()
             .copied()
             .filter(|f| f.describe().srgb)
             .next()
@@ -98,10 +106,14 @@ impl State {
         });
 
         let camera = Camera::new(&config, &device);
-        
-        let renderer = Renderer::new(&device, &config, &shader, camera.bind_group_layout());
-        let buffers = Renderer::push_quad(&device, config.width as f32 / 2.0,config.height as f32 / 2.0);
-        
+
+        let quad_size = 50.0;
+        let mut renderer = Renderer::new(&device, &config, &shader, camera.bind_group_layout());
+        renderer.create_quad_data(
+            point2::<f32>(config.width as f32 / 2.0, config.height as f32 / 2.0),
+            quad_size,
+        );
+
         Self {
             surface,
             device,
@@ -110,8 +122,12 @@ impl State {
             size,
             window,
             renderer,
-            buffers,
             camera,
+            quad_size,
+            player_speed: 5.0,
+            is_left_pressed: false,
+            is_right_pressed: false,
+            gravity: 3.0,
         }
     }
 
@@ -128,46 +144,91 @@ impl State {
         }
     }
 
-    #[allow(unused_variables)]
     fn input(&mut self, event: &WindowEvent) -> bool {
-        false
+        match event {
+            WindowEvent::KeyboardInput {
+                input:
+                    KeyboardInput {
+                        state,
+                        virtual_keycode: Some(keycode),
+                        ..
+                    },
+                ..
+            } => {
+                let is_pressed = *state == ElementState::Pressed;
+                match keycode {
+                    VirtualKeyCode::A => {
+                        self.is_left_pressed = is_pressed;
+                        true
+                    }
+                    VirtualKeyCode::D => {
+                        self.is_right_pressed = is_pressed;
+                        true
+                    }
+                    _ => false,
+                }
+            }
+            _ => false,
+        }
     }
 
-    fn update(&mut self) {}
+    fn update(&mut self) {
+        if self.is_right_pressed {
+             self.renderer.update_quad_data(
+                point2::<f32>(self.player_speed, 0.0),
+            );
+        }
+        if self.is_left_pressed {
+             self.renderer.update_quad_data(
+                point2::<f32>(-self.player_speed, 0.0),
+            );
+        }
+
+         self.renderer.update_quad_data(
+            point2::<f32>(0.0, -self.gravity),
+        );
+    }
 
     fn render(&mut self) -> Result<(), wgpu::SurfaceError> {
-        let output = self.surface.get_current_texture()?;    
-        let view = output.texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let output = self.surface.get_current_texture()?;
+        let view = output
+            .texture
+            .create_view(&wgpu::TextureViewDescriptor::default());
         //saves a series of gpu instructions (for example render_pass)
-        let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor{
-            label: Some("Render Encoder"),
-        });
-        
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("Render Encoder"),
+            });
+            let buffers = self.renderer.collect_buffers(&self.device);
+
         {
-            let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor{
+            let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("Render Pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment{
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: &view,
                     resolve_target: None,
-                    ops: wgpu::Operations{
-                        load: wgpu::LoadOp::Clear(wgpu::Color{
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color {
                             r: 0.1,
                             b: 0.2,
                             g: 0.3,
-                            a: 1.0
+                            a: 1.0,
                         }),
                         store: true,
                     },
                 })],
                 depth_stencil_attachment: None,
             });
-            
-            
-            render_pass.set_pipeline(&self.renderer.render_pipeline); 
+
+            render_pass.set_pipeline(&self.renderer.render_pipeline);
             render_pass.set_bind_group(0, self.camera.bind_group(), &[]);
-            render_pass.set_vertex_buffer(0, self.buffers.vertex_buffer.slice(..));
-            render_pass.set_index_buffer(self.buffers.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
-            render_pass.draw_indexed(0..self.buffers.num_of_indices, 0, 0..1);            
+            render_pass.set_vertex_buffer(0, buffers.vertex_buffer.slice(..));
+            render_pass.set_index_buffer(
+                buffers.index_buffer.slice(..),
+                wgpu::IndexFormat::Uint16,
+            );
+            render_pass.draw_indexed(0..buffers.num_of_indices, 0, 0..1);
         }
         self.queue.submit(iter::once(encoder.finish()));
         output.present(); //draws the stuff to the surface texture
@@ -175,7 +236,7 @@ impl State {
     }
 }
 
-#[cfg_attr(target_arch="wasm32", wasm_bindgen(start))]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen(start))]
 pub async fn run() {
     cfg_if::cfg_if! {
         if #[cfg(target_arch = "wasm32")] {
@@ -195,7 +256,7 @@ pub async fn run() {
         // the size manually when on web.
         use winit::dpi::PhysicalSize;
         window.set_inner_size(PhysicalSize::new(450, 400));
-        
+
         use winit::platform::web::WindowExtWebSys;
         web_sys::window()
             .and_then(|win| win.document())
@@ -245,7 +306,9 @@ pub async fn run() {
                 match state.render() {
                     Ok(_) => {}
                     // Reconfigure the surface if it's lost or outdated
-                    Err(wgpu::SurfaceError::Lost | wgpu::SurfaceError::Outdated) => state.resize(state.size),
+                    Err(wgpu::SurfaceError::Lost | wgpu::SurfaceError::Outdated) => {
+                        state.resize(state.size)
+                    }
                     // The system is out of memory, we should probably quit
                     Err(wgpu::SurfaceError::OutOfMemory) => *control_flow = ControlFlow::Exit,
                     // We're ignoring timeouts

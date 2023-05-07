@@ -1,5 +1,5 @@
-use wgpu::util::DeviceExt;
 use cgmath::{ortho, Matrix4, Point3, Vector3};
+use wgpu::util::DeviceExt;
 
 #[rustfmt::skip]
 const OPENGL_TO_WGPU_MATRIX: cgmath::Matrix4<f32> = cgmath::Matrix4::new(
@@ -9,19 +9,16 @@ const OPENGL_TO_WGPU_MATRIX: cgmath::Matrix4<f32> = cgmath::Matrix4::new(
     0.0, 0.0, 0.5, 1.0,
 );
 
-
 #[repr(C)]
 #[derive(Debug, Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
-struct CameraUniform{
+struct CameraUniform {
     //view_matrix: Matrix4<f32>,
     //projection_matrix: Matrix4<f32>,
     view_proj: [[f32; 4]; 4],
 }
 
-impl CameraUniform{
-    fn new(config: &wgpu::SurfaceConfiguration) -> Self{
-        use cgmath::SquareMatrix;
-        
+impl CameraUniform {
+    fn new(config: &wgpu::SurfaceConfiguration) -> Self {
         let left = 0.0;
         let right = config.width as f32;
         let bottom = 0.0;
@@ -36,78 +33,68 @@ impl CameraUniform{
         let view_matrix = Matrix4::look_at_rh(eye, target, up);
 
         let view_proj_mat = OPENGL_TO_WGPU_MATRIX * projection_matrix * view_matrix;
-        
-        Self{
+
+        Self {
             //view_matrix,
             //projection_matrix,
             view_proj: view_proj_mat.into(),
-        }   
+        }
     }
-    
 }
 
-
-pub struct Camera{
+pub struct Camera {
     camera_uniform: CameraUniform,
     camera_buffer: wgpu::Buffer,
     camera_bind_group_layout: wgpu::BindGroupLayout,
     camera_bind_group: wgpu::BindGroup,
 }
 
-impl Camera{
-    pub fn new(config: &wgpu::SurfaceConfiguration, device: &wgpu::Device) -> Self{
+impl Camera {
+    pub fn new(config: &wgpu::SurfaceConfiguration, device: &wgpu::Device) -> Self {
         let camera_uniform = CameraUniform::new(config);
-       let camera_buffer = device.create_buffer_init(
-            &wgpu::util::BufferInitDescriptor{
+        let camera_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Camera buffer"),
             contents: bytemuck::cast_slice(&[camera_uniform]),
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            }
-        );     
-        
-        let camera_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor{
-            entries: &[
-                wgpu::BindGroupLayoutEntry{
+        });
+
+        let camera_bind_group_layout =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                entries: &[wgpu::BindGroupLayoutEntry {
                     binding: 0,
                     visibility: wgpu::ShaderStages::VERTEX,
-                    ty: wgpu::BindingType::Buffer{
+                    ty: wgpu::BindingType::Buffer {
                         ty: wgpu::BufferBindingType::Uniform,
                         has_dynamic_offset: false,
-                        min_binding_size: None
+                        min_binding_size: None,
                     },
-                    count: None
-                }
-            ],
-            label: Some("camera bind group layout"),
-        });
-        
-        let camera_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor{
+                    count: None,
+                }],
+                label: Some("camera bind group layout"),
+            });
+
+        let camera_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             layout: &camera_bind_group_layout,
-            entries: &[
-                wgpu::BindGroupEntry{
-                    binding: 0,
-                    resource: camera_buffer.as_entire_binding(),
-                }
-            ],
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: camera_buffer.as_entire_binding(),
+            }],
             label: Some("camera bind group"),
         });
-        
-        Self{
+
+        Self {
             camera_uniform,
             camera_buffer,
             camera_bind_group_layout,
             camera_bind_group,
         }
     }
-    
-    pub fn bind_group_layout(&self) -> &wgpu::BindGroupLayout{
+
+    pub fn bind_group_layout(&self) -> &wgpu::BindGroupLayout {
         &self.camera_bind_group_layout
     }
-    
-    pub fn bind_group(&self) -> &wgpu::BindGroup{
+
+    pub fn bind_group(&self) -> &wgpu::BindGroup {
         &self.camera_bind_group
     }
-    
 }
-
-
