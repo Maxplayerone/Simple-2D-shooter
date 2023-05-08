@@ -9,7 +9,6 @@ use winit::{
 use wasm_bindgen::prelude::*;
 
 mod renderer;
-use renderer::Buffers;
 use renderer::Renderer;
 
 mod camera;
@@ -26,12 +25,20 @@ struct State {
     window: Window,
     renderer: Renderer,
     camera: Camera,
+    player: Player,
+    block: Block,
+}
 
-    quad_size: f32,
-    player_speed: f32,
+struct Player {
+    index: usize,
+    speed: f32,
     is_left_pressed: bool,
     is_right_pressed: bool,
     gravity: f32,
+}
+
+struct Block{
+    index: usize,
 }
 
 impl State {
@@ -108,11 +115,19 @@ impl State {
         let camera = Camera::new(&config, &device);
 
         let quad_size = 50.0;
-        let mut renderer = Renderer::new(&device, &config, &shader, camera.bind_group_layout());
-        renderer.create_quad_data(
-            point2::<f32>(config.width as f32 / 2.0, config.height as f32 / 2.0),
+        let mut renderer = Renderer::new(
+            &device,
+            &config,
+            &shader,
+            camera.bind_group_layout(),
             quad_size,
         );
+        let index = renderer.create_quad_data(point2::<f32>(
+            config.width as f32 / 2.0,
+            config.height as f32 / 2.0,
+        ));
+
+        let block_index = renderer.create_quad_data(point2::<f32>(10.0, 30.0));
 
         Self {
             surface,
@@ -123,11 +138,16 @@ impl State {
             window,
             renderer,
             camera,
-            quad_size,
-            player_speed: 5.0,
-            is_left_pressed: false,
-            is_right_pressed: false,
-            gravity: 3.0,
+            player: Player {
+                speed: 5.0,
+                is_left_pressed: false,
+                is_right_pressed: false,
+                gravity: 0.0,
+                index,
+            },
+            block: Block{
+                index: block_index,
+            }
         }
     }
 
@@ -158,11 +178,11 @@ impl State {
                 let is_pressed = *state == ElementState::Pressed;
                 match keycode {
                     VirtualKeyCode::A => {
-                        self.is_left_pressed = is_pressed;
+                        self.player.is_left_pressed = is_pressed;
                         true
                     }
                     VirtualKeyCode::D => {
-                        self.is_right_pressed = is_pressed;
+                        self.player.is_right_pressed = is_pressed;
                         true
                     }
                     _ => false,
@@ -173,20 +193,17 @@ impl State {
     }
 
     fn update(&mut self) {
-        if self.is_right_pressed {
-             self.renderer.update_quad_data(
-                point2::<f32>(self.player_speed, 0.0),
-            );
+        if self.player.is_right_pressed {
+            self.renderer
+                .update_quad_data(self.player.index, point2::<f32>(self.player.speed, 0.0));
         }
-        if self.is_left_pressed {
-             self.renderer.update_quad_data(
-                point2::<f32>(-self.player_speed, 0.0),
-            );
+        if self.player.is_left_pressed {
+            self.renderer
+                .update_quad_data(self.player.index, point2::<f32>(-self.player.speed, 0.0));
         }
 
-         self.renderer.update_quad_data(
-            point2::<f32>(0.0, -self.gravity),
-        );
+        self.renderer
+            .update_quad_data(self.player.index, point2::<f32>(0.0, -self.player.gravity));
     }
 
     fn render(&mut self) -> Result<(), wgpu::SurfaceError> {
@@ -200,7 +217,7 @@ impl State {
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("Render Encoder"),
             });
-            let buffers = self.renderer.collect_buffers(&self.device);
+        let buffers = self.renderer.collect_buffers(&self.device);
 
         {
             let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -224,10 +241,7 @@ impl State {
             render_pass.set_pipeline(&self.renderer.render_pipeline);
             render_pass.set_bind_group(0, self.camera.bind_group(), &[]);
             render_pass.set_vertex_buffer(0, buffers.vertex_buffer.slice(..));
-            render_pass.set_index_buffer(
-                buffers.index_buffer.slice(..),
-                wgpu::IndexFormat::Uint16,
-            );
+            render_pass.set_index_buffer(buffers.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
             render_pass.draw_indexed(0..buffers.num_of_indices, 0, 0..1);
         }
         self.queue.submit(iter::once(encoder.finish()));
