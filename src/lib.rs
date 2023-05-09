@@ -14,7 +14,10 @@ use renderer::Renderer;
 mod camera;
 use camera::Camera;
 
-use cgmath::point2;
+mod physics;
+use physics::check_player_gravity_collission;
+
+use cgmath::{point2, point3, Point2};
 
 struct State {
     surface: wgpu::Surface,
@@ -27,18 +30,48 @@ struct State {
     camera: Camera,
     player: Player,
     block: Block,
+
+    quad_size: usize,
+}
+
+pub trait Entity {
+    fn get_id(&self) -> usize;
+    fn get_pos(&self) -> &Point2<f32>;
 }
 
 struct Player {
     index: usize,
+    pos: Point2<f32>,
+
     speed: f32,
     is_left_pressed: bool,
     is_right_pressed: bool,
     gravity: f32,
 }
 
-struct Block{
+impl Entity for Player {
+    fn get_id(&self) -> usize {
+        self.index
+    }
+
+    fn get_pos(&self) -> &Point2<f32> {
+        &self.pos
+    }
+}
+
+struct Block {
     index: usize,
+    pos: Point2<f32>,
+}
+
+impl Entity for Block {
+    fn get_id(&self) -> usize {
+        self.index
+    }
+
+    fn get_pos(&self) -> &Point2<f32> {
+        &self.pos
+    }
 }
 
 impl State {
@@ -114,7 +147,10 @@ impl State {
 
         let camera = Camera::new(&config, &device);
 
-        let quad_size = 50.0;
+        let quad_size = 50;
+        let player_pos = point2::<f32>(config.width as f32 / 2.0, config.height as f32 / 2.0);
+        let block_pos = point2::<f32>(200.0, 230.0);
+
         let mut renderer = Renderer::new(
             &device,
             &config,
@@ -122,12 +158,12 @@ impl State {
             camera.bind_group_layout(),
             quad_size,
         );
-        let index = renderer.create_quad_data(point2::<f32>(
-            config.width as f32 / 2.0,
-            config.height as f32 / 2.0,
-        ));
-
-        let block_index = renderer.create_quad_data(point2::<f32>(10.0, 30.0));
+        let index = renderer.create_quad(player_pos, point3::<f32>(0.0, 1.0, 0.0));
+        let block_index = renderer.create_block(
+            block_pos,
+            point2::<usize>(6, 1),
+            point3::<f32>(1.0, 1.0, 1.0),
+        );
 
         Self {
             surface,
@@ -142,12 +178,15 @@ impl State {
                 speed: 5.0,
                 is_left_pressed: false,
                 is_right_pressed: false,
-                gravity: 0.0,
+                gravity: 3.0,
                 index,
+                pos: player_pos,
             },
-            block: Block{
+            block: Block {
                 index: block_index,
-            }
+                pos: block_pos,
+            },
+            quad_size,
         }
     }
 
@@ -193,17 +232,39 @@ impl State {
     }
 
     fn update(&mut self) {
+        //horizontal movement
         if self.player.is_right_pressed {
             self.renderer
                 .update_quad_data(self.player.index, point2::<f32>(self.player.speed, 0.0));
+            self.player.pos =
+                point2::<f32>(self.player.pos.x + self.player.speed, self.player.pos.y);
         }
         if self.player.is_left_pressed {
             self.renderer
                 .update_quad_data(self.player.index, point2::<f32>(-self.player.speed, 0.0));
+            self.player.pos =
+                point2::<f32>(self.player.pos.x - self.player.speed, self.player.pos.y);
         }
 
-        self.renderer
-            .update_quad_data(self.player.index, point2::<f32>(0.0, -self.player.gravity));
+        //vertical movement
+        //GRAVITY
+        let player_pos_after_gravity =
+            point2::<f32>(self.player.pos.x, self.player.pos.y - self.player.gravity);
+        match check_player_gravity_collission(
+            player_pos_after_gravity,
+            self.block.pos,
+            self.quad_size,
+        ) {
+            Some(new_player_pos) => {
+                self.renderer.change_quad_data(self.player.index, new_player_pos);
+                self.player.pos = new_player_pos;
+                },
+            None => {
+                self.renderer
+                    .update_quad_data(self.player.index, point2::<f32>(0.0, -self.player.gravity));
+                self.player.pos = player_pos_after_gravity;
+            }
+        };
     }
 
     fn render(&mut self) -> Result<(), wgpu::SurfaceError> {

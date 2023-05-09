@@ -43,8 +43,8 @@ impl CameraUniform {
 }
 
 pub struct Camera {
-    camera_uniform: CameraUniform,
-    camera_buffer: wgpu::Buffer,
+    //camera_uniform: CameraUniform,
+    //camera_buffer: wgpu::Buffer,
     camera_bind_group_layout: wgpu::BindGroupLayout,
     camera_bind_group: wgpu::BindGroup,
 }
@@ -83,8 +83,8 @@ impl Camera {
         });
 
         Self {
-            camera_uniform,
-            camera_buffer,
+            //camera_uniform,
+            //camera_buffer,
             camera_bind_group_layout,
             camera_bind_group,
         }

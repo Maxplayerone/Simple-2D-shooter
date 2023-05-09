@@ -1,11 +1,22 @@
-use cgmath::{point2, point3, Point2, Point3};
+use cgmath::{point2, Point2, Point3};
 use wgpu::util::DeviceExt;
+
+struct QuadInfo {
+    pos: Point2<f32>,
+    color: Point3<f32>,
+}
+
+impl QuadInfo {
+    fn new(pos: Point2<f32>, color: Point3<f32>) -> Self {
+        Self { pos, color }
+    }
+}
 
 pub struct Renderer {
     pub render_pipeline: wgpu::RenderPipeline,
 
-    prev_quad_positions: Vec<Point2<f32>>,
-    quad_size: f32,
+    quads: Vec<QuadInfo>,
+    quad_size: usize,
     current_quad_index: usize,
     vertices: Vec<Vertex>,
     indices: Vec<u16>,
@@ -58,7 +69,7 @@ impl Renderer {
         config: &wgpu::SurfaceConfiguration,
         shader: &wgpu::ShaderModule,
         camera_bind_group: &wgpu::BindGroupLayout,
-        size: f32,
+        size: usize,
     ) -> Self {
         //describes available binding group of the pipeline
         let render_pipeline_layout =
@@ -108,7 +119,7 @@ impl Renderer {
 
         Self {
             render_pipeline,
-            prev_quad_positions: Vec::new(),
+            quads: Vec::new(),
             quad_size: size,
             vertices: Vec::new(),
             indices: Vec::new(),
@@ -116,25 +127,64 @@ impl Renderer {
         }
     }
 
-    pub fn create_quad_data(&mut self, position: Point2<f32>) -> usize {
-
-        self.prev_quad_positions.push(position);
+    pub fn create_quad(&mut self, position: Point2<f32>, color: Point3<f32>) -> usize {
+        self.quads.push(QuadInfo::new(position, color));
         let index = self.current_quad_index;
         self.current_quad_index = self.current_quad_index + 1;
 
-        self.vertices
-            .push(Vertex::new(position, point3::<f32>(0.0, 1.0, 0.0)));
+        let fsize = self.quad_size as f32;
+
+        self.vertices.push(Vertex::new(position, color));
         self.vertices.push(Vertex::new(
-            point2::<f32>(position.x + self.quad_size, position.y),
-            point3::<f32>(0.0, 1.0, 0.0),
+            point2::<f32>(position.x + fsize, position.y),
+            color,
         ));
         self.vertices.push(Vertex::new(
-            point2::<f32>(position.x, position.y + self.quad_size),
-            point3::<f32>(0.0, 1.0, 0.0),
+            point2::<f32>(position.x, position.y + fsize),
+            color,
         ));
         self.vertices.push(Vertex::new(
-            point2::<f32>(position.x + self.quad_size, position.y + self.quad_size),
-            point3::<f32>(0.0, 1.0, 0.0),
+            point2::<f32>(position.x + fsize, position.y + fsize),
+            color,
+        ));
+
+        self.indices.push((index * 4).try_into().unwrap());
+        self.indices.push((index * 4 + 1).try_into().unwrap());
+        self.indices.push((index * 4 + 2).try_into().unwrap());
+        self.indices.push((index * 4 + 2).try_into().unwrap());
+        self.indices.push((index * 4 + 1).try_into().unwrap());
+        self.indices.push((index * 4 + 3).try_into().unwrap());
+
+        index
+    }
+
+    pub fn create_block(
+        &mut self,
+        position: Point2<f32>,
+        length: Point2<usize>,
+        color: Point3<f32>,
+    ) -> usize {
+        self.quads.push(QuadInfo::new(position, color));
+        let index = self.current_quad_index;
+        self.current_quad_index = self.current_quad_index + 1;
+
+        let fsize = self.quad_size as f32;
+
+        self.vertices.push(Vertex::new(position, color));
+        self.vertices.push(Vertex::new(
+            point2::<f32>(position.x + (self.quad_size * length.x) as f32, position.y),
+            color,
+        ));
+        self.vertices.push(Vertex::new(
+            point2::<f32>(position.x, position.y + (self.quad_size * length.y) as f32),
+            color,
+        ));
+        self.vertices.push(Vertex::new(
+            point2::<f32>(
+                position.x + (self.quad_size * length.x) as f32,
+                position.y + (self.quad_size * length.y) as f32,
+            ),
+            color,
         ));
 
         self.indices.push((index * 4).try_into().unwrap());
@@ -148,29 +198,42 @@ impl Renderer {
     }
 
     pub fn update_quad_data(&mut self, index: usize, delta_position: Point2<f32>) {
-        let prev_pos = self.prev_quad_positions[index];
+        let prev_pos = self.quads[index].pos;
         let new_quad_pos =
             point2::<f32>(prev_pos.x + delta_position.x, prev_pos.y + delta_position.y);
-        let dummy_color = point3::<f32>(0.0, 1.0, 0.0);
+        let color = self.quads[index].color;
 
-        self.vertices[4 * index] = Vertex::new(new_quad_pos, dummy_color);
-        self.vertices[4 * index + 1] = Vertex::new(
-            point2::<f32>(new_quad_pos.x + self.quad_size, new_quad_pos.y),
-            dummy_color,
-        );
-        self.vertices[4 * index + 2] = Vertex::new(
-            point2::<f32>(new_quad_pos.x, new_quad_pos.y + self.quad_size),
-            dummy_color,
-        );
+        let fsize = self.quad_size as f32;
+
+        self.vertices[4 * index] = Vertex::new(new_quad_pos, color);
+        self.vertices[4 * index + 1] =
+            Vertex::new(point2::<f32>(new_quad_pos.x + fsize, new_quad_pos.y), color);
+        self.vertices[4 * index + 2] =
+            Vertex::new(point2::<f32>(new_quad_pos.x, new_quad_pos.y + fsize), color);
         self.vertices[4 * index + 3] = Vertex::new(
-            point2::<f32>(
-                new_quad_pos.x + self.quad_size,
-                new_quad_pos.y + self.quad_size,
-            ),
-            dummy_color,
+            point2::<f32>(new_quad_pos.x + fsize, new_quad_pos.y + fsize),
+            color,
         );
 
-        self.prev_quad_positions[index] = new_quad_pos;
+        self.quads[index].pos = new_quad_pos;
+    }
+
+    pub fn change_quad_data(&mut self, index: usize, new_position: Point2<f32>) {
+        let color = self.quads[index].color;
+
+        let fsize = self.quad_size as f32;
+
+        self.vertices[4 * index] = Vertex::new(new_position, color);
+        self.vertices[4 * index + 1] =
+            Vertex::new(point2::<f32>(new_position.x + fsize, new_position.y), color);
+        self.vertices[4 * index + 2] =
+            Vertex::new(point2::<f32>(new_position.x, new_position.y + fsize), color);
+        self.vertices[4 * index + 3] = Vertex::new(
+            point2::<f32>(new_position.x + fsize, new_position.y + fsize),
+            color,
+        );
+
+        self.quads[index].pos = new_position;
     }
 
     pub fn collect_buffers(&mut self, device: &wgpu::Device) -> Buffers {
@@ -191,7 +254,7 @@ impl Renderer {
         Buffers {
             vertex_buffer,
             index_buffer,
-            num_of_indices 
+            num_of_indices,
         }
     }
 }
