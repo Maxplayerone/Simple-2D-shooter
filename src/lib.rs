@@ -62,6 +62,7 @@ impl Entity for Player {
 struct Block {
     index: usize,
     pos: Point2<f32>,
+    length: usize,
 }
 
 impl Entity for Block {
@@ -148,6 +149,7 @@ impl State {
         let camera = Camera::new(&config, &device);
 
         let quad_size = 50;
+        let block_length = 6;
         let player_pos = point2::<f32>(config.width as f32 / 2.0, config.height as f32 / 2.0);
         let block_pos = point2::<f32>(200.0, 230.0);
 
@@ -161,7 +163,7 @@ impl State {
         let index = renderer.create_quad(player_pos, point3::<f32>(0.0, 1.0, 0.0));
         let block_index = renderer.create_block(
             block_pos,
-            point2::<usize>(6, 1),
+            point2::<usize>(block_length, 1),
             point3::<f32>(1.0, 1.0, 1.0),
         );
 
@@ -185,6 +187,7 @@ impl State {
             block: Block {
                 index: block_index,
                 pos: block_pos,
+                length: block_length,
             },
             quad_size,
         }
@@ -254,6 +257,7 @@ impl State {
             player_pos_after_gravity,
             self.block.pos,
             self.quad_size,
+            self.block.length,
         ) {
             Some(new_player_pos) => {
                 self.renderer.change_quad_data(self.player.index, new_player_pos);
