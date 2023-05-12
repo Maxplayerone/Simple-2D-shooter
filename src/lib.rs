@@ -17,7 +17,9 @@ use camera::Camera;
 mod physics;
 use physics::check_player_gravity_collission;
 
-use cgmath::{point2, point3, Point2};
+use cgmath::{point2, point3, Point2, Point3};
+
+const WHITE: Point3<f32> = point3::<f32>(1.0, 1.0, 1.0);
 
 struct State {
     surface: wgpu::Surface,
@@ -29,9 +31,9 @@ struct State {
     renderer: Renderer,
     camera: Camera,
     player: Player,
-    block: Block,
+    blocks: Vec<Block>,
 
-    quad_size: usize,
+    quad_size: f32,
 }
 
 pub trait Entity {
@@ -43,10 +45,17 @@ struct Player {
     index: usize,
     pos: Point2<f32>,
 
-    speed: f32,
     is_left_pressed: bool,
     is_right_pressed: bool,
+    is_space_pressed: bool,
+    is_jumping: bool,
+
     gravity: f32,
+    speed: f32,
+    jumping_value: f32,
+
+    timer: f64,
+    timer_limit: f64,
 }
 
 impl Entity for Player {
@@ -62,7 +71,7 @@ impl Entity for Player {
 struct Block {
     index: usize,
     pos: Point2<f32>,
-    length: usize,
+    length: Point2<usize>,
 }
 
 impl Entity for Block {
@@ -147,11 +156,7 @@ impl State {
         });
 
         let camera = Camera::new(&config, &device);
-
-        let quad_size = 50;
-        let block_length = 6;
-        let player_pos = point2::<f32>(config.width as f32 / 2.0, config.height as f32 / 2.0);
-        let block_pos = point2::<f32>(200.0, 230.0);
+        let quad_size = 50.0;
 
         let mut renderer = Renderer::new(
             &device,
@@ -160,12 +165,52 @@ impl State {
             camera.bind_group_layout(),
             quad_size,
         );
-        let index = renderer.create_quad(player_pos, point3::<f32>(0.0, 1.0, 0.0));
-        let block_index = renderer.create_block(
-            block_pos,
-            point2::<usize>(block_length, 1),
-            point3::<f32>(1.0, 1.0, 1.0),
+
+        let player_pos = point2::<f32>(config.width as f32 / 2.0, config.height as f32 / 2.0 + 100.0);
+        let player_index = renderer.create_quad(player_pos, point3::<f32>(0.0, 1.0, 0.0));
+        let player =  Player {
+                speed: 5.0,
+                is_left_pressed: false,
+                is_right_pressed: false,
+                is_space_pressed: false,
+                is_jumping: false,
+                gravity: 8.0,
+                jumping_value: 14.0,
+                index: player_index,
+                pos: player_pos,
+                timer: 0.0,
+                timer_limit: 0.8,
+            };
+
+        let center_block_length = point2::<usize>(6, 1);
+        let center_block_pos = point2::<f32>(200.0, 330.0);
+        let center_block_index = renderer.create_block(
+            center_block_pos,
+            center_block_length,
+            WHITE,
         );
+        let center_block = Block {
+                index: center_block_index,
+                pos: center_block_pos,
+                length: center_block_length,
+         };
+
+        let ground_block_length = point2::<usize>(20, 2);
+        let ground_block_pos = point2::<f32>(0.0, 0.0);
+        let ground_block_index = renderer.create_block(
+            ground_block_pos,
+            ground_block_length,
+            WHITE,
+        );
+        let ground_block = Block{
+            index: ground_block_index,
+            pos: ground_block_pos,
+            length: ground_block_length,
+        };
+
+        let mut blocks = Vec::new();
+        blocks.push(center_block);
+        blocks.push(ground_block);
 
         Self {
             surface,
@@ -176,19 +221,8 @@ impl State {
             window,
             renderer,
             camera,
-            player: Player {
-                speed: 5.0,
-                is_left_pressed: false,
-                is_right_pressed: false,
-                gravity: 3.0,
-                index,
-                pos: player_pos,
-            },
-            block: Block {
-                index: block_index,
-                pos: block_pos,
-                length: block_length,
-            },
+            player,
+            blocks,
             quad_size,
         }
     }
@@ -227,6 +261,10 @@ impl State {
                         self.player.is_right_pressed = is_pressed;
                         true
                     }
+                    VirtualKeyCode::Space => {
+                        self.player.is_space_pressed = is_pressed;
+                        true
+                    }
                     _ => false,
                 }
             }
@@ -237,38 +275,60 @@ impl State {
     fn update(&mut self) {
         //horizontal movement
         if self.player.is_right_pressed {
-            self.renderer
-                .update_quad_data(self.player.index, point2::<f32>(self.player.speed, 0.0));
-            self.player.pos =
-                point2::<f32>(self.player.pos.x + self.player.speed, self.player.pos.y);
+            self.renderer.update_quad_data(self.player.index, point2::<f32>(self.player.speed, 0.0));
+            self.player.pos = point2::<f32>(self.player.pos.x + self.player.speed, self.player.pos.y);
         }
         if self.player.is_left_pressed {
-            self.renderer
-                .update_quad_data(self.player.index, point2::<f32>(-self.player.speed, 0.0));
-            self.player.pos =
-                point2::<f32>(self.player.pos.x - self.player.speed, self.player.pos.y);
+            self.renderer.update_quad_data(self.player.index, point2::<f32>(-self.player.speed, 0.0));
+            self.player.pos = point2::<f32>(self.player.pos.x - self.player.speed, self.player.pos.y);
         }
 
         //vertical movement
-        //GRAVITY
-        let player_pos_after_gravity =
-            point2::<f32>(self.player.pos.x, self.player.pos.y - self.player.gravity);
-        match check_player_gravity_collission(
+        let player_pos_after_gravity = point2::<f32>(self.player.pos.x, self.player.pos.y - self.player.gravity);
+        //pre-calculating where the player will be after adding gravity to shorthand function arguments
+        let mut player_pos_on_block = point2::<f32>(0.0, 0.0);
+        //player position on top of the block he's colliding with 
+
+        let mut is_colliding = false; //is the player colliding with ANY block
+        //collission detection
+        for block in self.blocks.iter(){
+            let collission_info = check_player_gravity_collission(
             player_pos_after_gravity,
-            self.block.pos,
+            block.pos,
             self.quad_size,
-            self.block.length,
-        ) {
-            Some(new_player_pos) => {
-                self.renderer.change_quad_data(self.player.index, new_player_pos);
-                self.player.pos = new_player_pos;
-                },
-            None => {
-                self.renderer
-                    .update_quad_data(self.player.index, point2::<f32>(0.0, -self.player.gravity));
-                self.player.pos = player_pos_after_gravity;
+            block.length,
+            );
+
+            if let Some(player_pos) = collission_info{
+                is_colliding = true;
+                player_pos_on_block = player_pos;
             }
-        };
+
+        }
+        if is_colliding{
+            self.renderer.change_quad_data(self.player.index, player_pos_on_block);
+            self.player.pos = player_pos_on_block;
+        }else{
+            self.renderer.update_quad_data(self.player.index, point2::<f32>(0.0, -self.player.gravity));
+            self.player.pos = player_pos_after_gravity;
+        }
+
+        //JUMPING
+        /*
+        if self.player.is_space_pressed  || self.player.is_jumping{
+            self.player.is_jumping = true;
+            self.player.timer = self.player.timer + 0.1;
+            if self.player.timer >= self.player.timer_limit{
+                self.player.is_jumping = false;
+                self.player.timer = 0.0;
+            }
+                self.renderer
+                  .update_quad_data(self.player.index, point2::<f32>(0.0, self.player.jumping_value));
+            self.player.pos = point2::<f32>(self.player.pos.x, self.player.pos.y + self.player.jumping_value);
+            self.player.is_space_pressed = false;
+        }
+        */
+        
     }
 
     fn render(&mut self) -> Result<(), wgpu::SurfaceError> {
